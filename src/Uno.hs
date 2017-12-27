@@ -14,7 +14,6 @@ import System.Random.Shuffle
 import Data.List.Split
 import Data.List
 import Data.Maybe
-import Debug.Trace
 
 data Color = Red | Blue | Green | Yellow | Black
   deriving (Show, Eq)
@@ -127,7 +126,7 @@ plays game =
                 wildColor <- colorChoices card]
   in do
     draws <- if null plays'
-             then trace ("have to draw" ++ show hand) $ draw game
+             then draw game
              else return []
     return (concat [plays', draws])
 
@@ -138,8 +137,8 @@ playOut' :: (MonadRandom m) => Game -> Int -> m Int
 playOut' game n = if finished game
   then return   n
   else do
-    nextSteps <- trace ("step" ++ (show $ discard game)) plays game
-    step <- trace ("options:" ++ (show $ length nextSteps)) sample nextSteps
+    nextSteps <- plays game
+    step <- sample nextSteps
     playOut' (fromJust step) (n + 1)
 
 playOut :: (MonadRandom m) => Game -> m Int

@@ -13,6 +13,7 @@ import System.Random
 import System.Random.Shuffle
 import Data.List.Split
 import Data.List
+import Data.Maybe
 import Debug.Trace
 
 data Color = Red | Blue | Green | Yellow | Black
@@ -26,8 +27,19 @@ type Card = (Color, Type)
 type Deck = [Card]
 type Hand = [Card]
 
+rotate :: Int -> [a] -> [a]
+rotate _ [] = []
+rotate n xs = zipWith const (drop n (cycle xs)) xs
+
 -- Draw deck, discard deck, wild color, player hands (in order of play)
 type Game = (Deck, Deck, Color, [Hand])
+discard :: Game -> Deck
+discard (_, discard, _, _) = discard
+
+sample :: (MonadRandom m) => [a] -> m (Maybe a)
+sample [] = return Nothing
+sample xs = do i <- getRandomR (0, length xs - 1)
+               return $ Just (xs !! i)
 
 cartProd xs ys = [(x,y) | x <- xs, y <- ys]
 double xs = concat [xs, xs]
@@ -45,12 +57,44 @@ baseDeck = concat [
 
 handSize = 7::Int
 
+skip :: Game -> Game
+skip (deck, discard', wildColor, hands) =
+  (deck, discard', wildColor, rotate 1 hands)
+
+reverse :: Game -> Game
+reverse (deck, discard', wildColor, cur:hands) =
+  (deck, discard', wildColor, cur : (Data.List.reverse hands))
+
+-- TODO: shuffle isnt random!
+-- TODO: skip turn of player who has to draw
+drawCard :: Int -> Game -> Game
+drawCard 0 game = game
+drawCard n ([], topCard:discard', wildColor, cur:hands) =
+  drawCard n
+           (discard', [topCard], wildColor, (cur) : hands)
+drawCard n (pick:deck, discard', wildColor, cur:hands) =
+  drawCard (n - 1)
+           (deck, discard', wildColor, (pick:cur) : hands)
+
+specialEffect :: Card -> Game -> Game
+specialEffect (_, Skip) game = skip game
+specialEffect (_, Reverse) game = Uno.reverse game
+specialEffect (_, DrawTwo) game = drawCard 2 game
+specialEffect (_, DrawFour) game = drawCard 4 game
+specialEffect (_, _) game = game
+
+  -- Skip | Reverse | DrawTwo | Wild | DrawFour
+
 -- Color is the chosen wild color
 apply :: Game -> Card -> Color -> Game
 apply game card color =
-  let (deck, discard, _, hand : others) = game
+  let (deck, discard', _, hand : others) = game
   in  assert (card `elem` hand && canPlay game card)
-             (deck, discard, color, others ++ [delete card hand])
+             specialEffect card
+                          (deck,
+                           card:discard',
+                           color,
+                           others ++ [delete card hand])
 
 colorChoices :: Card -> [Color]
 colorChoices (Black, _) = [Red, Blue, Green, Yellow]
@@ -63,17 +107,17 @@ canPlay (_, (c1, t1):_, c1', _) (c2, t2) =
 canPlay (_, [], _, _) _ = error "Empty discard pile"
 
 draw ::  (MonadRandom m) => Game -> m [Game]
-draw ([], top:discard, wildColor, hands) = do
-  discard' <- shuffleM discard
-  draw (discard', [top], wildColor, hands)
+draw ([], top:discard', wildColor, hands) = do
+  discard'' <- shuffleM discard'
+  draw (discard'', [top], wildColor, hands)
 draw game =
-  let (top:rest, discard, wildColor, hand:hands) = game
+  let (top:rest, discard', wildColor, hand:hands) = game
   in  if canPlay game top
     then return [(rest,
-                  top:discard,
+                  top:discard',
                   c,
                   hand:hands) | c <- colorChoices top]
-    else draw (rest, discard, wildColor, (top:hand):hands)
+    else draw (rest, discard', wildColor, (top:hand):hands)
 
 plays :: (MonadRandom m) => Game -> m [Game]
 plays game =
@@ -83,7 +127,7 @@ plays game =
                 wildColor <- colorChoices card]
   in do
     draws <- if null plays'
-             then draw game
+             then trace ("have to draw" ++ show hand) $ draw game
              else return []
     return (concat [plays', draws])
 
@@ -93,7 +137,10 @@ finished (_, _, _, hands) = null (last hands)
 playOut' :: (MonadRandom m) => Game -> Int -> m Int
 playOut' game n = if finished game
   then return   n
-  else playOut' game (n + 1)
+  else do
+    nextSteps <- trace ("step" ++ (show $ discard game)) plays game
+    step <- trace ("options:" ++ (show $ length nextSteps)) sample nextSteps
+    playOut' (fromJust step) (n + 1)
 
 playOut :: (MonadRandom m) => Game -> m Int
 playOut game = playOut' game 0

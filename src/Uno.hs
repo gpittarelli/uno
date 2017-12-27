@@ -33,7 +33,7 @@ rotate n xs = zipWith const (drop n (cycle xs)) xs
 -- Draw deck, discard deck, wild color, player hands (in order of play)
 type Game = (Deck, Deck, Color, [Hand])
 discard :: Game -> Deck
-discard (_, discard, _, _) = discard
+discard (_, discard', _, _) = discard'
 
 sample :: (MonadRandom m) => [a] -> m (Maybe a)
 sample [] = return Nothing
@@ -78,8 +78,8 @@ drawCard n (pick:deck, discard', wildColor, cur:hands) =
 specialEffect :: Card -> Game -> Game
 specialEffect (_, Skip) game = skip game
 specialEffect (_, Reverse) game = Uno.reverse game
-specialEffect (_, DrawTwo) game = drawCard 2 game
-specialEffect (_, DrawFour) game = drawCard 4 game
+specialEffect (_, DrawTwo) game = (skip . drawCard 2) game
+specialEffect (_, DrawFour) game = (skip . drawCard 4) game
 specialEffect (_, _) game = game
 
   -- Skip | Reverse | DrawTwo | Wild | DrawFour

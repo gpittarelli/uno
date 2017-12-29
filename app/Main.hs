@@ -17,8 +17,11 @@ mainStartingTurnCounts = do
         (print . length) options
   forever loop
 
-main :: IO ()
-main = do
+countTurns :: IO ()
+countTurns = do
   game <- dealM baseDeck 5
   turnCount <- playOut game
   print turnCount
+
+main :: IO ()
+main = forever countTurns

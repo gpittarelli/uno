@@ -91,17 +91,14 @@ specialEffect (_, DrawTwo) game = fmap skip (drawCard 2 game)
 specialEffect (_, DrawFour) game = fmap skip (drawCard 4 game)
 specialEffect (_, _) game = return game
 
-  -- Skip | Reverse | DrawTwo | Wild | DrawFour
-
--- Color is the chosen wild color
 apply :: (MonadRandom m) => Game -> Card -> Color -> m Game
-apply game card color =
+apply game card wildColor =
   let (deck, discard', _, hand : others) = game
   in  assert (card `elem` hand && canPlay game card)
              specialEffect card
                           (deck,
                            card:discard',
-                           color,
+                           wildColor,
                            others ++ [delete card hand])
 
 colorChoices :: Card -> [Color]

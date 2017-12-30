@@ -8,6 +8,7 @@ module Uno
     ) where
 
 import Control.Exception.Base
+import Control.Monad
 import Control.Monad.Random.Class
 import System.Random
 import System.Random.Shuffle
@@ -54,38 +55,46 @@ baseDeck = concat [
   double $ double $ cartProd [Black] [Wild, DrawFour]
   ]
 
-handSize = 7::Int
+handSize :: Int
+handSize = 7
 
 skip :: Game -> Game
 skip (deck, discard', wildColor, hands) =
   (deck, discard', wildColor, rotate 1 hands)
 
 reverse :: Game -> Game
+reverse (_, _, _, []) = error "Invalid game: no hands"
 reverse (deck, discard', wildColor, cur:hands) =
   (deck, discard', wildColor, cur : (Data.List.reverse hands))
 
--- TODO: shuffle isnt random!
--- TODO: skip turn of player who has to draw
-drawCard :: Int -> Game -> Game
-drawCard 0 game = game
+reshuffle :: (MonadRandom m) => Game -> m Game
+reshuffle (_, [], _, _) = error "can't reshuffle game with no discard"
+reshuffle (deck, topCard:discard', wildColor, hands) =
+  do newDeck <- shuffleM (deck ++ discard')
+     return (newDeck, [topCard], wildColor, hands)
+
+
+drawCard :: (MonadRandom m) => Int -> Game -> m Game
+drawCard _ (_, _, _, []) = error "invalid game: no hands"
+drawCard 0 game = return game
 drawCard n ([], topCard:discard', wildColor, cur:hands) =
-  drawCard n
-           (discard', [topCard], wildColor, (cur) : hands)
+  do shuffled <- reshuffle ([], topCard:discard', wildColor, cur:hands)
+     drawCard n shuffled
 drawCard n (pick:deck, discard', wildColor, cur:hands) =
   drawCard (n - 1)
            (deck, discard', wildColor, (pick:cur) : hands)
 
-specialEffect :: Card -> Game -> Game
-specialEffect (_, Skip) game = skip game
-specialEffect (_, Reverse) game = Uno.reverse game
-specialEffect (_, DrawTwo) game = (skip . drawCard 2) game
-specialEffect (_, DrawFour) game = (skip . drawCard 4) game
-specialEffect (_, _) game = game
+specialEffect :: (MonadRandom m) => Card -> Game -> m Game
+specialEffect (_, Skip) game = return $ skip game
+specialEffect (_, Reverse) game = return $ Uno.reverse game
+specialEffect (_, DrawTwo) game = fmap skip (drawCard 2 game)
+specialEffect (_, DrawFour) game = fmap skip (drawCard 4 game)
+specialEffect (_, _) game = return game
 
   -- Skip | Reverse | DrawTwo | Wild | DrawFour
 
 -- Color is the chosen wild color
-apply :: Game -> Card -> Color -> Game
+apply :: (MonadRandom m) => Game -> Card -> Color -> m Game
 apply game card color =
   let (deck, discard', _, hand : others) = game
   in  assert (card `elem` hand && canPlay game card)
@@ -121,14 +130,14 @@ draw game =
 plays :: (MonadRandom m) => Game -> m [Game]
 plays game =
   let (_, _, _, hand:_) = game
-      plays' = [(apply game card wildColor) |
-                card <- filter (canPlay game) hand,
-                wildColor <- colorChoices card]
-  in do
-    draws <- if null plays'
-             then draw game
-             else return []
-    return (concat [plays', draws])
+      plays' = [
+        (card, wildColor) |
+        card <- filter (canPlay game) hand,
+        wildColor <- colorChoices card]
+  in if null plays'
+     then draw game
+     else sequence (liftM (\(card, wildColor) -> apply game card wildColor)
+                          plays')
 
 finished :: Game -> Bool
 finished (_, _, _, hands) = null (last hands)

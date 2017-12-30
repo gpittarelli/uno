@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Uno
     ( baseDeck,
       deal,
@@ -10,6 +12,8 @@ module Uno
 import Control.Exception.Base
 import Control.Monad
 import Control.Monad.Random.Class
+import Control.Lens hiding (element)
+import Control.Lens.TH
 import System.Random
 import System.Random.Shuffle
 import Data.List.Split
@@ -31,10 +35,19 @@ rotate :: Int -> [a] -> [a]
 rotate _ [] = []
 rotate n xs = zipWith const (drop n (cycle xs)) xs
 
+data Player = Player { _hand :: Hand }
+  deriving (Show, Eq)
+
+makeLenses ''Player
+
 -- Draw deck, discard deck, wild color, player hands (in order of play)
-type Game = (Deck, Deck, Color, [Hand])
-discard :: Game -> Deck
-discard (_, discard', _, _) = discard'
+data Game = Game { _deck :: Deck
+                 , _discard :: Deck
+                 , _wildColor :: Color
+                 , _players :: [Player] }
+  deriving (Show, Eq)
+
+makeLenses ''Game
 
 sample :: (MonadRandom m) => [a] -> m (Maybe a)
 sample [] = return Nothing
@@ -59,30 +72,44 @@ handSize :: Int
 handSize = 7
 
 skip :: Game -> Game
-skip (deck, discard', wildColor, hands) =
-  (deck, discard', wildColor, rotate 1 hands)
+skip = over players $ rotate 1
+
+headLens :: Lens' [a] a
+headLens = lens head (\orig -> \newhead -> newhead : (tail orig))
+
+tailLens :: Lens' [a] [a]
+tailLens = lens tail (\orig -> \newtail -> (head orig) : newtail)
 
 reverse :: Game -> Game
-reverse (_, _, _, []) = error "Invalid game: no hands"
-reverse (deck, discard', wildColor, cur:hands) =
-  (deck, discard', wildColor, cur : (Data.List.reverse hands))
+reverse = over (players . tailLens) Data.List.reverse
 
 reshuffle :: (MonadRandom m) => Game -> m Game
-reshuffle (_, [], _, _) = error "can't reshuffle game with no discard"
-reshuffle (deck, topCard:discard', wildColor, hands) =
-  do newDeck <- shuffleM (deck ++ discard')
-     return (newDeck, [topCard], wildColor, hands)
+reshuffle game =
+  let discard' = _discard game
+      topCard:_ = discard'
+  in do newDeck <- shuffleM ((_deck game) ++ discard')
+        return (game & deck .~ newDeck & discard .~ [topCard])
 
+-- give card to current player
+giveCard :: Card -> Game -> Game
+giveCard c game =
+  game & (players . headLens . hand) %~ ((:) c)
+
+pick :: Game -> Game
+pick game =
+  let topCard:deck' = _deck game
+  in giveCard topCard (game & deck .~ deck')
 
 drawCard :: (MonadRandom m) => Int -> Game -> m Game
-drawCard _ (_, _, _, []) = error "invalid game: no hands"
+drawCard _ Game{_players=[]} = error "invalid game: no hands"
 drawCard 0 game = return game
-drawCard n ([], topCard:discard', wildColor, cur:hands) =
-  do shuffled <- reshuffle ([], topCard:discard', wildColor, cur:hands)
+drawCard n game@Game{_deck=[]} =
+  do shuffled <- reshuffle game
      drawCard n shuffled
-drawCard n (pick:deck, discard', wildColor, cur:hands) =
-  drawCard (n - 1)
-           (deck, discard', wildColor, (pick:cur) : hands)
+drawCard n game = drawCard (n - 1) $ pick game
+
+removeCard :: Card -> Player -> Player
+removeCard c = over hand (delete c)
 
 specialEffect :: (MonadRandom m) => Card -> Game -> m Game
 specialEffect (_, Skip) game = return $ skip game
@@ -93,13 +120,15 @@ specialEffect (_, _) game = return game
 
 apply :: (MonadRandom m) => Game -> Card -> Color -> m Game
 apply game card wildColor =
-  let (deck, discard', _, hand : others) = game
-  in  assert (card `elem` hand && canPlay game card)
+  let deck = _deck game
+      discard' = _discard game
+      cur : others = _players game
+  in  assert (card `elem` (_hand cur) && canPlay game card)
              specialEffect card
-                          (deck,
-                           card:discard',
-                           wildColor,
-                           others ++ [delete card hand])
+                          Game { _deck = deck
+                               , _discard = card:discard'
+                               , _wildColor = wildColor
+                               , _players = others ++ [removeCard card cur]}
 
 colorChoices :: Card -> [Color]
 colorChoices (Black, _) = [Red, Blue, Green, Yellow]
@@ -107,26 +136,27 @@ colorChoices _          = [Black]
 
 -- Can play card on the current game?
 canPlay :: Game -> Card -> Bool
-canPlay (_, (c1, t1):_, c1', _) (c2, t2) =
+canPlay Game{_discard = (c1, t1):_, _wildColor = c1'} (c2, t2) =
   c1 == c2 || t1 == t2 || c2 == Black || (c1 == Black && c2 == c1')
-canPlay (_, [], _, _) _ = error "Empty discard pile"
+canPlay Game{_discard=[]} _ = error "Empty discard pile"
 
-draw ::  (MonadRandom m) => Game -> m [Game]
-draw ([], top:discard', wildColor, hands) = do
-  discard'' <- shuffleM discard'
-  draw (discard'', [top], wildColor, hands)
+-- Draw and play next cards
+draw :: (MonadRandom m) => Game -> m [Game]
+draw game@Game{_deck=[]} =
+  do shuffled <- reshuffle game
+     draw shuffled
 draw game =
-  let (top:rest, discard', wildColor, hand:hands) = game
-  in  if canPlay game top
-    then return [(rest,
-                  top:discard',
-                  c,
-                  hand:hands) | c <- colorChoices top]
-    else draw (rest, discard', wildColor, (top:hand):hands)
+  let top:rest = _deck game
+      discard' = _discard game
+  in if canPlay game top
+     then return [game { _deck = rest
+                       , _discard = top:discard'
+                       , _wildColor = c } | c <- colorChoices top]
+     else draw $ giveCard top $ game {_deck = rest}
 
 plays :: (MonadRandom m) => Game -> m [Game]
 plays game =
-  let (_, _, _, hand:_) = game
+  let hand:_ = map _hand $ _players game
       plays' = [
         (card, wildColor) |
         card <- filter (canPlay game) hand,
@@ -137,7 +167,7 @@ plays game =
                           plays')
 
 finished :: Game -> Bool
-finished (_, _, _, hands) = null (last hands)
+finished game = isJust $ find null (map _hand $ _players game)
 
 playOut' :: (MonadRandom m) => Game -> Int -> m Int
 playOut' game n = if finished game
@@ -155,14 +185,18 @@ deal deck players rng =
   let deck' = shuffle' deck (length deck) rng
       (hands, rest) = splitAt (players * handSize) deck'
       firstCard : deck'' = rest
-  in (deck'', [firstCard], Red, chunksOf handSize hands)
+  in Game{ _deck = deck''
+         , _discard = [firstCard]
+         , _wildColor = Red
+         , _players = map (\hand -> Player{_hand = hand})
+           $ chunksOf handSize hands}
 
 dealM :: (MonadRandom m) => Deck -> Int -> m Game
 dealM deck players = do
   deck' <- shuffleM deck
   let (hands, rest) = splitAt (players * handSize) deck'
       firstCard : deck'' = rest
-  return (deck'',
-          [firstCard],
-          head (colorChoices firstCard),
-          chunksOf handSize hands)
+  return Game { _deck = deck''
+              , _discard = [firstCard]
+              , _wildColor = head (colorChoices firstCard)
+              , _players = map (\hand -> Player{_hand = hand}) $ chunksOf handSize hands}

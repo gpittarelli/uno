@@ -25,6 +25,7 @@ dependencies:
 - random-shuffle
 - split
 - MonadRandom
+- lens
 
 library:
   source-dirs: src

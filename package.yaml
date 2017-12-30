@@ -1,17 +1,17 @@
 name:                uno
 version:             0.1.0.0
-github:              "githubuser/uno"
-license:             BSD3
-author:              "Author name here"
-maintainer:          "example@example.com"
-copyright:           "2017 Author name here"
+github:              "gpittarelli/uno"
+license:             MIT
+author:              "George Pittarelli"
+maintainer:          "g@gjp.cc"
+copyright:           "2017 George Pittarelli"
 
 extra-source-files:
 - README.md
 - ChangeLog.md
 
 # Metadata used when publishing your package
-synopsis:            Short description of your package
+synopsis:            Basic uno simulation
 # category:            Web
 
 # To avoid duplicated efforts in documentation and dealing with the
